@@ -7,9 +7,9 @@ def extract_missions_data():
     list_of_missions = [
         "STS-40",
         "Biosatellite%20III",
-        "Biosatellite%20II",
-        "Cosmos%20782",
-        "Cosmos%20936",
+        # "Biosatellite%20II",
+        # "Cosmos%20782",
+        # "Cosmos%20936",
         # "Cosmos%201514",
         # "Cosmos%201129",
         # "Cosmos%201667",
@@ -53,12 +53,8 @@ def transform_mission_data(list_of_mission_data):
     df['people'] = df["people"].apply(parse_json)
     df['versionInfo'] = df["versionInfo"].apply(parse_json)
     df['parents'] = df["parents"].apply(parse_json)
-    df['added_col1'] = 'Added Column1'
-    df['added_col2'] = 'This is latest addition second column.'
-
-
-    print(df)
-
+    df['added_col1'] = 2
+    df['added_col2'] = 2.2323
     return df
 
 def load_mission_data(df):
@@ -73,13 +69,7 @@ def load_mission_data(df):
             'db_name':db_name,
             'table_name':table_name
         }
-    
         postgres = space_etl.PostgresqlDestination(db_name=db_name)
-        schema_handle = space_etl.SchemaDriftHandle(db_name=db_name)
-        # Since we added columns in the transformation phase
-        
-        schema_handle.check_schema_drift(df=df,details=details)
-        
 
         postgres.write_dataframe(df=df,details=details)
         postgres.close_connection()
@@ -95,7 +85,7 @@ def load_mission_data(df):
 if __name__=='__main__':
     list_of_mission_data = extract_missions_data()
     df = transform_mission_data(list_of_mission_data=list_of_mission_data)
-    # load_mission_data(df=df)
+    load_mission_data(df=df)
 
 
 

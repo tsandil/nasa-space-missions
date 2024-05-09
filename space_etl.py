@@ -1,6 +1,4 @@
 from sqlalchemy import create_engine, text
-from sqlalchemy.schema import CreateSchema
-import psycopg2
 
 class PostgresqlDestination:
 
@@ -18,70 +16,129 @@ class PostgresqlDestination:
             conn.commit()
             return conn
 
-    def query(self, query):
+    # def query(self, query):
+    #     with self.engine.connect() as conn:
+    #         cur = conn.execute(text(query))
+    #         return cur
+    
+    def execute_query(self,query):
         with self.engine.connect() as conn:
-            cur = conn.execute(text(query))
-            return cur
-
+            result = conn.execute(text(query))
+            conn.commit()
+            return result
+        
     def write_dataframe(self,df,details):
         table_name = details['table_name']
-        schema_name = details['schema_name']
-        # check if table exists
-        # if exists add column
-        # then load
-        #if not exists columns
-        # then load
+        schema_name = details['schema_name'] 
+        schema_handle = SchemaDriftHandle(db_name=self.db_name)
+        columns_to_add = schema_handle.check_schema_drift(df=df,details=details)
+        if columns_to_add:
+            schema_handle.handle_schema_drift(df=df,details=details,columns_to_add=columns_to_add)
+
+
+        # if isinstance(self,SchemaDriftHandle):
+        #     print("Performing Schema Drift Handle by adding necessary columns in the table...\n")
+        #     schema_handle = SchemaDriftHandle(self.db_name)
+        #     columns_to_add = schema_handle.check_schema_drift(df=df,details=details)
+        #     if columns_to_add:
+        #         schema_handle.handle_schema_drift(df=df,details=details,columns_to_add=columns_to_add)
+            
         df.to_sql(table_name,schema = schema_name, con = self.engine, if_exists = 'append',index = False)
         
     def close_connection(self):
         return self.engine.dispose()
         
-class SchemaDriftHandle:
-    def __init__(self,db_name) -> None:
-        self.db_name = db_name
-        self.db_user_name = 'tsandil'
-        self.db_user_password = 'stratocaster'
-        self.conn = psycopg2.connect(
-            database = f'{self.db_name}',
-            user = f'{self.db_user_name}',
-            password= f'{self.db_user_password}',
-            host = '127.0.0.1',
-            port = '5432'
-        )
 
-    def execute_query(self,query):
-        try:
-            cur = self.conn.cursor()
-            cur.execute(query=query)
-            self.conn.commit()
-            print(f'Query {query} Executed Successfully.\n')
-        except psycopg2.Error as e:
-            self.conn.rollback()
-            print(f'Error Excuting the query {query}\n: {e}')
-        return cur
-        
-
-    def add_columns(self,details,column_name,column_type):
+class SchemaDriftHandle(PostgresqlDestination):
+    def __init__(self, db_name) -> None:
+        super().__init__(self)
+        super().__init__(db_name)
+    
+    def select_existing_columns(self,details):
         schema_name = details['schema_name']
         table_name = details['table_name']
-        query = f'ALTER TABLE {schema_name}.{table_name} ADD COLUMN {column_name} {column_type}'
-        self.execute_query(query=query)
-        print(f"Added column {column_name} of type {column_type} to the table.")
+        query = f"SELECT column_name FROM  information_schema.columns WHERE  table_schema = '{schema_name}' AND table_name = '{table_name}'"
 
-    def check_schema_drift(self,df,details):
-        schema_name = details['schema_name']
-        table_name = details['table_name']
-        df_columns = df.columns.tolist()
-        query = f"SELECT column_name FROM information_schema.columns WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'"
         cur = self.execute_query(query=query)
+        result = cur.fetchall()
+        return result
+    
+    def check_schema_drift(self,df,details):
+        with self.engine.connect() as conn:
+
+            # Checking if column exists or no
+            df_columns = df.columns.tolist()
+            cur = self.select_existing_columns(details=details)
+
+            existing_columns = [row[0] for row in cur]
+            columns_to_add = [col for col in df_columns if col not in existing_columns]
+            return columns_to_add    
+
+    def add_columns(self, details,column_name, column_type):
+        schema_name = details['schema_name']
+        table_name = details['table_name']
+        query = f"ALTER TABLE {schema_name}.{table_name} ADD COLUMN {column_name} {column_type}"
         
-        existing_columns = [row[0] for row in cur.fetchall()]
+        cur = self.execute_query(query=query)
+        print(f"Added column {column_name} of type {column_type} to the table.")
+        return cur
+    
+    def alter_column_datatypes(self,details,column_name,column_type):
+        schema_name = details['schema_name']
+        table_name = details['table_name']
+        query = f"ALTER TABLE {schema_name}.{table_name} ALTER COLUMN {column_name} TYPE {column_type}"
+        cur = self.execute_query(query=query)
+        print(f"Column : {column_name} has been altered to type {column_type}")
+        return cur
 
-        columns_to_add = [col for col in df_columns if col not in existing_columns]
-        if columns_to_add:
+    def get_column_datatypes(self,details):
+        schema_name = details['schema_name']
+        table_name = details['table_name']
+        query = f"SELECT column_name, data_type FROM information_schema. columns WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'; "
+        cur = self.execute_query(query=query)
+        result = cur.fetchall()
+        print(result)
+        return result
+    
+    def handle_schema_drift(self,df, details,columns_to_add):
             for column_name in columns_to_add:
-                column_type = 'VARCHAR(255)'
+                df_datatype = df[column_name].dtype
+                column_type = self.map_df_dtype_to_postgres(df_datatype)
                 self.add_columns(details=details,column_name=column_name,column_type=column_type)
-        pass
+        
+    
 
-                
+    def map_df_dtype_to_postgres(self,df_dtype):
+        dtype_map = {
+            'int8':'SMALLINT',
+            'int16':'SMALLINT',
+            'int32':'INTEGER',
+            'int64':'BIGINT',
+            'float16':'REAL',
+            'float32':'REAL',
+            'float64':'DOUBLE PRECISION',
+            'bool':'BOOLEAN',
+            'datetime64[ns':'TIMESTAMP',
+            'string':'TEXT',
+            'boolean':'BOOLEAN',
+            'datetime':'TIMESTAMP',
+            'date':'DATE',
+            'float':'DOUBLE PRECISION',
+            'integer':'BIGINT',
+            'arrays':'ARRAY',
+            'datetime64':'TIMESTAMP',
+            'object':'text',
+            'category':'text',
+            'mixed':'text',
+        }
+
+        dtype_str = str(df_dtype)
+        column_type = dtype_map.get(dtype_str,'TEXT')
+
+        return column_type
+    
+
+    
+
+
+
